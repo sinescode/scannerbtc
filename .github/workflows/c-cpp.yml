@@ -1,1 +1,282 @@
 
+# .github/workflows/release.yml
+name: Release - Cross Platform Build
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CXXFLAGS: -O3 -std=c++17 -pthread -Wall -Wextra -Wshadow
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # LINUX BUILDS (Native + Cross-compile ARM64)
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            cross: false
+          - arch: arm64
+            runner: ubuntu-24.04-arm  # Native ARM64 runner
+            cross: false
+          - arch: arm64-cross
+            runner: ubuntu-24.04
+            cross: true
+            target: aarch64-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (native)
+        if: ${{ !matrix.cross }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecp256k1-dev libssl-dev
+
+      - name: Install dependencies (cross-compile ARM64)
+        if: ${{ matrix.cross }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libssl-dev:arm64 crossbuild-essential-arm64
+          # Build libsecp256k1 for ARM64 from source
+          git clone https://github.com/bitcoin-core/secp256k1.git /tmp/secp256k1
+          cd /tmp/secp256k1
+          cmake -B build \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.toolchain.cmake \
+            -DCMAKE_INSTALL_PREFIX=/usr/aarch64-linux-gnu \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+          sudo cmake --install build
+
+      - name: Build bloom_builder
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            export CC=aarch64-linux-gnu-gcc
+            export CXX=aarch64-linux-gnu-g++
+            export CXXFLAGS="$CXXFLAGS -march=armv8-a"
+          else
+            export CXXFLAGS="$CXXFLAGS -march=native"
+          fi
+          make bloom_builder
+
+      - name: Build scanner (TSV only)
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            export CC=aarch64-linux-gnu-gcc
+            export CXX=aarch64-linux-gnu-g++
+            export CXXFLAGS="$CXXFLAGS -march=armv8-a"
+            export LDFLAGS="-L/usr/aarch64-linux-gnu/lib"
+            export PKG_CONFIG_PATH=/usr/aarch64-linux-gnu/lib/pkgconfig
+          else
+            export CXXFLAGS="$CXXFLAGS -march=native"
+          fi
+          make scanner
+
+      - name: Build scanner-pg (PostgreSQL support)
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            export CC=aarch64-linux-gnu-gcc
+            export CXX=aarch64-linux-gnu-g++
+            export CXXFLAGS="$CXXFLAGS -march=armv8-a -DWITH_PG"
+            export LDFLAGS="-L/usr/aarch64-linux-gnu/lib"
+            export PKG_CONFIG_PATH=/usr/aarch64-linux-gnu/lib/pkgconfig
+            # Cross-compile libpq if needed or skip for cross builds
+            echo "Skipping PostgreSQL build for cross-compile (libpq complexity)"
+            touch scanner-pg  # Placeholder
+          else
+            sudo apt-get install -y libpq-dev
+            export CXXFLAGS="$CXXFLAGS -march=native"
+            make scanner-pg
+          fi
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist/btc-scanner-linux-${{ matrix.arch }}
+          cp bloom_builder dist/btc-scanner-linux-${{ matrix.arch }}/ || true
+          cp scanner dist/btc-scanner-linux-${{ matrix.arch }}/ || true
+          [ -f scanner-pg ] && cp scanner-pg dist/btc-scanner-linux-${{ matrix.arch }}/ || true
+          cp Makefile README.md LICENSE* dist/btc-scanner-linux-${{ matrix.arch }}/ 2>/dev/null || true
+          cd dist
+          tar czf btc-scanner-linux-${{ matrix.arch }}.tar.gz btc-scanner-linux-${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # macOS BUILDS (Intel + Apple Silicon)
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-macos:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-13  # Intel
+          - arch: arm64
+            runner: macos-14  # Apple Silicon (M1/M2)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install secp256k1 openssl pkg-config
+          # PostgreSQL for scanner-pg
+          brew install libpq
+          echo 'export PKG_CONFIG_PATH="/opt/homebrew/opt/libpq/lib/pkgconfig:$PKG_CONFIG_PATH"' >> ~/.zshrc
+
+      - name: Build bloom_builder
+        run: |
+          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
+          make bloom_builder
+
+      - name: Build scanner
+        run: |
+          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
+          export PKG_CONFIG_PATH="/opt/homebrew/opt/openssl/lib/pkgconfig:/opt/homebrew/opt/secp256k1/lib/pkgconfig:$PKG_CONFIG_PATH"
+          make scanner
+
+      - name: Build scanner-pg
+        run: |
+          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
+          export PKG_CONFIG_PATH="/opt/homebrew/opt/libpq/lib/pkgconfig:/opt/homebrew/opt/openssl/lib/pkgconfig:$PKG_CONFIG_PATH"
+          make scanner-pg
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist/btc-scanner-macos-${{ matrix.arch }}
+          cp bloom_builder scanner scanner-pg dist/btc-scanner-macos-${{ matrix.arch }}/
+          cp Makefile README.md LICENSE* dist/btc-scanner-macos-${{ matrix.arch }}/ 2>/dev/null || true
+          cd dist
+          tar czf btc-scanner-macos-${{ matrix.arch }}.tar.gz btc-scanner-macos-${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/*.tar.gz
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # WINDOWS BUILDS (MSYS2/MinGW-w64)
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            msystem: MINGW64
+            prefix: mingw-w64-x86_64
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: >-
+            ${{ matrix.prefix }}-gcc
+            ${{ matrix.prefix }}-make
+            ${{ matrix.prefix }}-cmake
+            ${{ matrix.prefix }}-openssl
+            ${{ matrix.prefix }}-pkg-config
+            ${{ matrix.prefix }}-libwinpthread-git
+
+      - name: Build libsecp256k1 (Windows)
+        run: |
+          git clone https://github.com/bitcoin-core/secp256k1.git /tmp/secp256k1
+          cd /tmp/secp256k1
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/mingw64 \
+            -DSECP256K1_BUILD_TESTS=OFF \
+            -DSECP256K1_BUILD_EXAMPLES=OFF \
+            -DSECP256K1_ENABLE_MODULE_RECOVERY=ON
+          cmake --build build -j$(nproc)
+          cmake --install build
+
+      - name: Build bloom_builder
+        run: |
+          export CXXFLAGS="$CXXFLAGS -static-libgcc -static-libstdc++"
+          make bloom_builder
+
+      - name: Build scanner
+        run: |
+          export CXXFLAGS="$CXXFLAGS -static-libgcc -static-libstdc++"
+          export LDFLAGS="-static -lws2_32"
+          make scanner
+
+      - name: Package binaries
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\btc-scanner-windows-${{ matrix.arch }}
+          Copy-Item bloom_builder.exe, scanner.exe -Destination dist\btc-scanner-windows-${{ matrix.arch }}\ -ErrorAction SilentlyContinue
+          Copy-Item Makefile, README.md -Destination dist\btc-scanner-windows-${{ matrix.arch }}\ -ErrorAction SilentlyContinue
+          cd dist
+          Compress-Archive -Path btc-scanner-windows-${{ matrix.arch }} -DestinationPath btc-scanner-windows-${{ matrix.arch }}.zip
+
+      - name: Upload artifact (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/*.zip
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # CREATE RELEASE
+  # ─────────────────────────────────────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Display structure
+        run: ls -R artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Bitcoin Address Scanner ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
