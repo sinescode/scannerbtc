@@ -1,5 +1,4 @@
 
-# .github/workflows/release.yml
 name: Release - Cross Platform Build
 
 "on":
@@ -30,7 +29,7 @@ jobs:
             runner: ubuntu-24.04
             cross: false
           - arch: arm64
-            runner: ubuntu-24.04-arm  # Native ARM64 runner
+            runner: ubuntu-24.04-arm
             cross: false
           - arch: arm64-cross
             runner: ubuntu-24.04
@@ -49,17 +48,23 @@ jobs:
       - name: Install dependencies (cross-compile ARM64)
         if: ${{ matrix.cross }}
         run: |
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            libssl-dev:arm64 crossbuild-essential-arm64
+            crossbuild-essential-arm64 \
+            libssl-dev:arm64
+
           # Build libsecp256k1 for ARM64 from source
           git clone https://github.com/bitcoin-core/secp256k1.git /tmp/secp256k1
           cd /tmp/secp256k1
           cmake -B build \
-            -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.toolchain.cmake \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
             -DCMAKE_INSTALL_PREFIX=/usr/aarch64-linux-gnu \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSECP256K1_BUILD_TESTS=OFF \
+            -DSECP256K1_BUILD_EXAMPLES=OFF \
+            -DSECP256K1_ENABLE_MODULE_RECOVERY=ON
           cmake --build build -j$(nproc)
           sudo cmake --install build
 
@@ -90,14 +95,8 @@ jobs:
       - name: Build scanner-pg (PostgreSQL support)
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
-            export CC=aarch64-linux-gnu-gcc
-            export CXX=aarch64-linux-gnu-g++
-            export CXXFLAGS="$CXXFLAGS -march=armv8-a -DWITH_PG"
-            export LDFLAGS="-L/usr/aarch64-linux-gnu/lib"
-            export PKG_CONFIG_PATH=/usr/aarch64-linux-gnu/lib/pkgconfig
-            # Cross-compile libpq if needed or skip for cross builds
             echo "Skipping PostgreSQL build for cross-compile (libpq complexity)"
-            touch scanner-pg  # Placeholder
+            touch scanner-pg
           else
             sudo apt-get install -y libpq-dev
             export CXXFLAGS="$CXXFLAGS -march=native"
@@ -131,35 +130,33 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: macos-13  # Intel
+            runner: macos-13
           - arch: arm64
-            runner: macos-14  # Apple Silicon (M1/M2)
+            runner: macos-14
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
-          brew install secp256k1 openssl pkg-config
-          # PostgreSQL for scanner-pg
-          brew install libpq
-          echo 'export PKG_CONFIG_PATH="/opt/homebrew/opt/libpq/lib/pkgconfig:$PKG_CONFIG_PATH"' >> ~/.zshrc
+          brew install secp256k1 openssl pkg-config libpq
 
       - name: Build bloom_builder
         run: |
           export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
+          export PKG_CONFIG_PATH="$(brew --prefix openssl)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig:$PKG_CONFIG_PATH"
           make bloom_builder
 
       - name: Build scanner
         run: |
           export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
-          export PKG_CONFIG_PATH="/opt/homebrew/opt/openssl/lib/pkgconfig:/opt/homebrew/opt/secp256k1/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export PKG_CONFIG_PATH="$(brew --prefix openssl)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig:$PKG_CONFIG_PATH"
           make scanner
 
       - name: Build scanner-pg
         run: |
           export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
-          export PKG_CONFIG_PATH="/opt/homebrew/opt/libpq/lib/pkgconfig:/opt/homebrew/opt/openssl/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix openssl)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig:$PKG_CONFIG_PATH"
           make scanner-pg
 
       - name: Package binaries
