@@ -15,9 +15,9 @@ env:
   CXXFLAGS: -O3 -std=c++17 -pthread -Wall -Wextra -Wshadow
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────────
-  # LINUX BUILDS (Native + Cross-compile ARM64)
-  # ─────────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
+  # LINUX BUILDS
+  # ───────────────────────────────────────────────────────────────────────────
   build-linux:
     name: Linux ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -34,7 +34,6 @@ jobs:
           - arch: arm64-cross
             runner: ubuntu-24.04
             cross: true
-            target: aarch64-linux-gnu
 
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +48,18 @@ jobs:
         if: ${{ matrix.cross }}
         run: |
           sudo dpkg --add-architecture arm64
+
+          # ports.ubuntu.com hosts non-x86 packages; security.ubuntu.com does not
+          sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null <<'EOF'
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
+
+          # Restrict existing amd64 sources so they don't try to serve arm64
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || \
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+
           sudo apt-get update
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
@@ -79,7 +90,7 @@ jobs:
           fi
           make bloom_builder
 
-      - name: Build scanner (TSV only)
+      - name: Build scanner
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
             export CC=aarch64-linux-gnu-gcc
@@ -92,10 +103,10 @@ jobs:
           fi
           make scanner
 
-      - name: Build scanner-pg (PostgreSQL support)
+      - name: Build scanner-pg
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
-            echo "Skipping PostgreSQL build for cross-compile (libpq complexity)"
+            echo "Skipping PostgreSQL build for cross-compile"
             touch scanner-pg
           else
             sudo apt-get install -y libpq-dev
@@ -119,9 +130,9 @@ jobs:
           name: linux-${{ matrix.arch }}
           path: dist/*.tar.gz
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # macOS BUILDS (Intel + Apple Silicon)
-  # ─────────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
+  # macOS BUILDS
+  # ───────────────────────────────────────────────────────────────────────────
   build-macos:
     name: macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -130,7 +141,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: macos-13
+            runner: macos-14
           - arch: arm64
             runner: macos-14
 
@@ -143,20 +154,33 @@ jobs:
 
       - name: Build bloom_builder
         run: |
+          BREW_OPENSSL=$(brew --prefix openssl)
+          BREW_SECP=$(brew --prefix secp256k1)
+          export CPPFLAGS="-I$BREW_OPENSSL/include -I$BREW_SECP/include"
+          export LDFLAGS="-L$BREW_OPENSSL/lib -L$BREW_SECP/lib"
+          export PKG_CONFIG_PATH="$BREW_OPENSSL/lib/pkgconfig:$BREW_SECP/lib/pkgconfig"
           export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
-          export PKG_CONFIG_PATH="$(brew --prefix openssl)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig:$PKG_CONFIG_PATH"
           make bloom_builder
 
       - name: Build scanner
         run: |
+          BREW_OPENSSL=$(brew --prefix openssl)
+          BREW_SECP=$(brew --prefix secp256k1)
+          export CPPFLAGS="-I$BREW_OPENSSL/include -I$BREW_SECP/include"
+          export LDFLAGS="-L$BREW_OPENSSL/lib -L$BREW_SECP/lib"
+          export PKG_CONFIG_PATH="$BREW_OPENSSL/lib/pkgconfig:$BREW_SECP/lib/pkgconfig"
           export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
-          export PKG_CONFIG_PATH="$(brew --prefix openssl)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig:$PKG_CONFIG_PATH"
           make scanner
 
       - name: Build scanner-pg
         run: |
+          BREW_OPENSSL=$(brew --prefix openssl)
+          BREW_SECP=$(brew --prefix secp256k1)
+          BREW_PQ=$(brew --prefix libpq)
+          export CPPFLAGS="-I$BREW_OPENSSL/include -I$BREW_SECP/include -I$BREW_PQ/include"
+          export LDFLAGS="-L$BREW_OPENSSL/lib -L$BREW_SECP/lib -L$BREW_PQ/lib"
+          export PKG_CONFIG_PATH="$BREW_OPENSSL/lib/pkgconfig:$BREW_SECP/lib/pkgconfig:$BREW_PQ/lib/pkgconfig"
           export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
-          export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix openssl)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig:$PKG_CONFIG_PATH"
           make scanner-pg
 
       - name: Package binaries
@@ -173,9 +197,9 @@ jobs:
           name: macos-${{ matrix.arch }}
           path: dist/*.tar.gz
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # WINDOWS BUILDS (MSYS2/MinGW-w64)
-  # ─────────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
+  # WINDOWS BUILDS
+  # ───────────────────────────────────────────────────────────────────────────
   build-windows:
     name: Windows ${{ matrix.arch }}
     runs-on: windows-latest
@@ -187,12 +211,13 @@ jobs:
             msystem: MINGW64
             prefix: mingw-w64-x86_64
 
-    defaults:
-      run:
-        shell: msys2 {0}
-
     steps:
       - uses: actions/checkout@v4
+
+      # Clone secp256k1 using the runner's native git BEFORE entering MSYS2 shell
+      - name: Clone libsecp256k1
+        shell: cmd
+        run: git clone https://github.com/bitcoin-core/secp256k1.git C:\secp256k1
 
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
@@ -206,11 +231,12 @@ jobs:
             ${{ matrix.prefix }}-openssl
             ${{ matrix.prefix }}-pkg-config
             ${{ matrix.prefix }}-libwinpthread-git
+            git
 
       - name: Build libsecp256k1 (Windows)
+        shell: msys2 {0}
         run: |
-          git clone https://github.com/bitcoin-core/secp256k1.git /tmp/secp256k1
-          cd /tmp/secp256k1
+          cd /c/secp256k1
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/mingw64 \
@@ -221,11 +247,13 @@ jobs:
           cmake --install build
 
       - name: Build bloom_builder
+        shell: msys2 {0}
         run: |
           export CXXFLAGS="$CXXFLAGS -static-libgcc -static-libstdc++"
           make bloom_builder
 
       - name: Build scanner
+        shell: msys2 {0}
         run: |
           export CXXFLAGS="$CXXFLAGS -static-libgcc -static-libstdc++"
           export LDFLAGS="-static -lws2_32"
@@ -240,15 +268,15 @@ jobs:
           cd dist
           Compress-Archive -Path btc-scanner-windows-${{ matrix.arch }} -DestinationPath btc-scanner-windows-${{ matrix.arch }}.zip
 
-      - name: Upload artifact (Windows)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.arch }}
           path: dist/*.zip
 
-  # ─────────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
   # CREATE RELEASE
-  # ─────────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
   release:
     name: Create Release
     needs: [build-linux, build-macos, build-windows]
