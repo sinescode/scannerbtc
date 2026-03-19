@@ -1,10 +1,12 @@
 name: Release - Cross Platform Build
 
-"on":
+on:
   push:
+    branches: [ main, master ]
     tags:
       - 'v*.*.*'
       - 'v*.*'
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -48,16 +50,12 @@ jobs:
         run: |
           sudo dpkg --add-architecture arm64
 
-          # Ubuntu 24.04 uses DEB822 format (ubuntu.sources), not sources.list
-          # Rewrite it to restrict to amd64 only, then add ports for arm64
           if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
             sudo sed -i 's/^Types: deb$/Types: deb/' /etc/apt/sources.list.d/ubuntu.sources
-            # Add arch constraint to every stanza
             sudo python3 - <<'PYEOF'
           import re, pathlib
           p = pathlib.Path('/etc/apt/sources.list.d/ubuntu.sources')
           txt = p.read_text()
-          # Add "Architectures: amd64" after every "Types:" line if not already present
           out = []
           for line in txt.splitlines():
               out.append(line)
@@ -67,12 +65,10 @@ jobs:
           PYEOF
           fi
 
-          # Also restrict any legacy sources.list lines
           if [ -f /etc/apt/sources.list ]; then
             sudo sed -i '/^deb /s/^deb /deb [arch=amd64] /' /etc/apt/sources.list
           fi
 
-          # Add ARM64 via ports.ubuntu.com (the only server that hosts non-x86)
           sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null <<'EOF'
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
@@ -98,29 +94,38 @@ jobs:
           cmake --build build -j$(nproc)
           sudo cmake --install build
 
+      - name: Set build flags (cross-compile)
+        if: ${{ matrix.cross }}
+        run: |
+          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+          echo "CXXFLAGS_EXTRA=-march=armv8-a -I/usr/aarch64-linux-gnu/include" >> $GITHUB_ENV
+          echo "LDFLAGS_EXTRA=-L/usr/aarch64-linux-gnu/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/aarch64-linux-gnu/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Set build flags (native)
+        if: ${{ !matrix.cross }}
+        run: |
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
+          echo "CXXFLAGS_EXTRA=-march=native" >> $GITHUB_ENV
+          echo "LDFLAGS_EXTRA=" >> $GITHUB_ENV
+
       - name: Build bloom_builder
         run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            export CC=aarch64-linux-gnu-gcc
-            export CXX=aarch64-linux-gnu-g++
-            export CXXFLAGS="$CXXFLAGS -march=armv8-a -I/usr/aarch64-linux-gnu/include"
-          else
-            export CXXFLAGS="$CXXFLAGS -march=native"
-          fi
-          make bloom_builder
+          make bloom_builder \
+            CC="${CC}" \
+            CXX="${CXX}" \
+            CXXFLAGS="${CXXFLAGS} ${CXXFLAGS_EXTRA}" \
+            LDFLAGS="${LDFLAGS} ${LDFLAGS_EXTRA}"
 
       - name: Build scanner
         run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            export CC=aarch64-linux-gnu-gcc
-            export CXX=aarch64-linux-gnu-g++
-            export CXXFLAGS="$CXXFLAGS -march=armv8-a -I/usr/aarch64-linux-gnu/include"
-            export LDFLAGS="-L/usr/aarch64-linux-gnu/lib"
-            export PKG_CONFIG_PATH=/usr/aarch64-linux-gnu/lib/pkgconfig
-          else
-            export CXXFLAGS="$CXXFLAGS -march=native"
-          fi
-          make scanner
+          make scanner \
+            CC="${CC}" \
+            CXX="${CXX}" \
+            CXXFLAGS="${CXXFLAGS} ${CXXFLAGS_EXTRA}" \
+            LDFLAGS="${LDFLAGS} ${LDFLAGS_EXTRA}"
 
       - name: Build scanner-pg
         run: |
@@ -129,8 +134,11 @@ jobs:
             touch scanner-pg
           else
             sudo apt-get install -y libpq-dev
-            export CXXFLAGS="$CXXFLAGS -march=native"
-            make scanner-pg
+            make scanner-pg \
+              CC="${CC}" \
+              CXX="${CXX}" \
+              CXXFLAGS="${CXXFLAGS} ${CXXFLAGS_EXTRA}" \
+              LDFLAGS="${LDFLAGS} ${LDFLAGS_EXTRA}"
           fi
 
       - name: Package binaries
@@ -171,36 +179,35 @@ jobs:
         run: |
           brew install secp256k1 openssl pkg-config libpq
 
-      - name: Build bloom_builder
-        run: |
-          BREW_OPENSSL=$(brew --prefix openssl)
-          BREW_SECP=$(brew --prefix secp256k1)
-          export CPPFLAGS="-I$BREW_OPENSSL/include -I$BREW_SECP/include"
-          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
-          export LDFLAGS="-L$BREW_OPENSSL/lib -L$BREW_SECP/lib -arch ${{ matrix.arch }}"
-          export PKG_CONFIG_PATH="$BREW_OPENSSL/lib/pkgconfig:$BREW_SECP/lib/pkgconfig"
-          make bloom_builder CXXFLAGS="$CXXFLAGS" CPPFLAGS="$CPPFLAGS" LDFLAGS="$LDFLAGS"
-
-      - name: Build scanner
-        run: |
-          BREW_OPENSSL=$(brew --prefix openssl)
-          BREW_SECP=$(brew --prefix secp256k1)
-          export CPPFLAGS="-I$BREW_OPENSSL/include -I$BREW_SECP/include"
-          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
-          export LDFLAGS="-L$BREW_OPENSSL/lib -L$BREW_SECP/lib -arch ${{ matrix.arch }}"
-          export PKG_CONFIG_PATH="$BREW_OPENSSL/lib/pkgconfig:$BREW_SECP/lib/pkgconfig"
-          make scanner CXXFLAGS="$CXXFLAGS" CPPFLAGS="$CPPFLAGS" LDFLAGS="$LDFLAGS"
-
-      - name: Build scanner-pg
+      - name: Set environment variables
         run: |
           BREW_OPENSSL=$(brew --prefix openssl)
           BREW_SECP=$(brew --prefix secp256k1)
           BREW_PQ=$(brew --prefix libpq)
-          export CPPFLAGS="-I$BREW_OPENSSL/include -I$BREW_SECP/include -I$BREW_PQ/include"
-          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
-          export LDFLAGS="-L$BREW_OPENSSL/lib -L$BREW_SECP/lib -L$BREW_PQ/lib -arch ${{ matrix.arch }}"
-          export PKG_CONFIG_PATH="$BREW_OPENSSL/lib/pkgconfig:$BREW_SECP/lib/pkgconfig:$BREW_PQ/lib/pkgconfig"
-          make scanner-pg CXXFLAGS="$CXXFLAGS" CPPFLAGS="$CPPFLAGS" LDFLAGS="$LDFLAGS"
+          echo "OPENSSL_ROOT=${BREW_OPENSSL}" >> $GITHUB_ENV
+          echo "SECP_ROOT=${BREW_SECP}" >> $GITHUB_ENV
+          echo "PQ_ROOT=${BREW_PQ}" >> $GITHUB_ENV
+
+      - name: Build bloom_builder
+        run: |
+          make bloom_builder \
+            CXXFLAGS="${CXXFLAGS} -arch ${{ matrix.arch }} -I${OPENSSL_ROOT}/include -I${SECP_ROOT}/include" \
+            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib" \
+            PKG_CONFIG_PATH="${OPENSSL_ROOT}/lib/pkgconfig:${SECP_ROOT}/lib/pkgconfig"
+
+      - name: Build scanner
+        run: |
+          make scanner \
+            CXXFLAGS="${CXXFLAGS} -arch ${{ matrix.arch }} -I${OPENSSL_ROOT}/include -I${SECP_ROOT}/include" \
+            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib" \
+            PKG_CONFIG_PATH="${OPENSSL_ROOT}/lib/pkgconfig:${SECP_ROOT}/lib/pkgconfig"
+
+      - name: Build scanner-pg
+        run: |
+          make scanner-pg \
+            CXXFLAGS="${CXXFLAGS} -arch ${{ matrix.arch }} -I${OPENSSL_ROOT}/include -I${SECP_ROOT}/include -I${PQ_ROOT}/include" \
+            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib -L${PQ_ROOT}/lib" \
+            PKG_CONFIG_PATH="${OPENSSL_ROOT}/lib/pkgconfig:${SECP_ROOT}/lib/pkgconfig:${PQ_ROOT}/lib/pkgconfig"
 
       - name: Package binaries
         run: |
@@ -233,7 +240,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Use native Windows git BEFORE entering MSYS2 shell
       - name: Clone libsecp256k1
         shell: cmd
         run: git clone https://github.com/bitcoin-core/secp256k1.git C:\secp256k1
@@ -267,15 +273,15 @@ jobs:
       - name: Build bloom_builder
         shell: msys2 {0}
         run: |
-          export CXXFLAGS="$CXXFLAGS -static-libgcc -static-libstdc++"
-          make bloom_builder
+          make bloom_builder \
+            CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++"
 
       - name: Build scanner
         shell: msys2 {0}
         run: |
-          export CXXFLAGS="$CXXFLAGS -static-libgcc -static-libstdc++"
-          export LDFLAGS="-static -lws2_32"
-          make scanner
+          make scanner \
+            CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++" \
+            LDFLAGS="-static -lws2_32"
 
       - name: Package binaries
         shell: powershell
@@ -299,6 +305,7 @@ jobs:
     name: Create Release
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
