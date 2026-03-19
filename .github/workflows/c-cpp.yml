@@ -1,6 +1,7 @@
+
 name: Release - Cross Platform Build
 
-on:
+"on":
   push:
     branches: [ main, master ]
     tags:
@@ -51,9 +52,8 @@ jobs:
           sudo dpkg --add-architecture arm64
 
           if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
-            sudo sed -i 's/^Types: deb$/Types: deb/' /etc/apt/sources.list.d/ubuntu.sources
             sudo python3 - <<'PYEOF'
-          import re, pathlib
+          import pathlib
           p = pathlib.Path('/etc/apt/sources.list.d/ubuntu.sources')
           txt = p.read_text()
           out = []
@@ -81,7 +81,6 @@ jobs:
             crossbuild-essential-arm64 \
             libssl-dev:arm64
 
-          # Build libsecp256k1 for ARM64 from source
           git clone https://github.com/bitcoin-core/secp256k1.git /tmp/secp256k1
           cd /tmp/secp256k1
           cmake -B build \
@@ -192,22 +191,19 @@ jobs:
         run: |
           make bloom_builder \
             CXXFLAGS="${CXXFLAGS} -arch ${{ matrix.arch }} -I${OPENSSL_ROOT}/include -I${SECP_ROOT}/include" \
-            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib" \
-            PKG_CONFIG_PATH="${OPENSSL_ROOT}/lib/pkgconfig:${SECP_ROOT}/lib/pkgconfig"
+            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib"
 
       - name: Build scanner
         run: |
           make scanner \
             CXXFLAGS="${CXXFLAGS} -arch ${{ matrix.arch }} -I${OPENSSL_ROOT}/include -I${SECP_ROOT}/include" \
-            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib" \
-            PKG_CONFIG_PATH="${OPENSSL_ROOT}/lib/pkgconfig:${SECP_ROOT}/lib/pkgconfig"
+            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib"
 
       - name: Build scanner-pg
         run: |
           make scanner-pg \
             CXXFLAGS="${CXXFLAGS} -arch ${{ matrix.arch }} -I${OPENSSL_ROOT}/include -I${SECP_ROOT}/include -I${PQ_ROOT}/include" \
-            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib -L${PQ_ROOT}/lib" \
-            PKG_CONFIG_PATH="${OPENSSL_ROOT}/lib/pkgconfig:${SECP_ROOT}/lib/pkgconfig:${PQ_ROOT}/lib/pkgconfig"
+            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib -L${PQ_ROOT}/lib"
 
       - name: Package binaries
         run: |
@@ -237,13 +233,11 @@ jobs:
             msystem: MINGW64
             prefix: mingw-w64-x86_64
 
-    defaults:
-      run:
-        shell: msys2 {0}
-
+    # NO global defaults shell here — each step declares its own shell
     steps:
       - uses: actions/checkout@v4
 
+      # Use native Windows git BEFORE MSYS2 is set up
       - name: Clone libsecp256k1
         shell: cmd
         run: git clone https://github.com/bitcoin-core/secp256k1.git C:\secp256k1
@@ -262,6 +256,7 @@ jobs:
             ${{ matrix.prefix }}-libwinpthread-git
 
       - name: Build libsecp256k1 (Windows)
+        shell: msys2 {0}
         run: |
           cd /c/secp256k1
           cmake -B build \
@@ -274,13 +269,15 @@ jobs:
           cmake --install build
 
       - name: Build bloom_builder
+        shell: msys2 {0}
         run: |
-          make bloom_builder \
+          mingw32-make bloom_builder \
             CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++"
 
       - name: Build scanner
+        shell: msys2 {0}
         run: |
-          make scanner \
+          mingw32-make scanner \
             CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++" \
             LDFLAGS="-static -lws2_32"
 

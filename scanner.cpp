@@ -972,7 +972,11 @@ private:
         // MAP_POPULATE: kernel pre-faults pages into page cache in the background
         // while we load/build the index — effectively free prefetch.
         tsv_data = reinterpret_cast<const char*>(
-            mmap(nullptr, tsv_size, PROT_READ, MAP_SHARED | MAP_POPULATE, tsv_fd, 0));
+            mmap(nullptr, tsv_size, PROT_READ, MAP_SHARED
+            #ifdef MAP_POPULATE
+                | MAP_POPULATE
+            #endif
+                , tsv_fd, 0));
         if (tsv_data == MAP_FAILED) {
             tsv_data = reinterpret_cast<const char*>(
                 mmap(nullptr, tsv_size, PROT_READ, MAP_SHARED, tsv_fd, 0));
