@@ -237,6 +237,10 @@ jobs:
             msystem: MINGW64
             prefix: mingw-w64-x86_64
 
+    defaults:
+      run:
+        shell: msys2 {0}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -258,7 +262,6 @@ jobs:
             ${{ matrix.prefix }}-libwinpthread-git
 
       - name: Build libsecp256k1 (Windows)
-        shell: msys2 {0}
         run: |
           cd /c/secp256k1
           cmake -B build \
@@ -271,13 +274,11 @@ jobs:
           cmake --install build
 
       - name: Build bloom_builder
-        shell: msys2 {0}
         run: |
           make bloom_builder \
             CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++"
 
       - name: Build scanner
-        shell: msys2 {0}
         run: |
           make scanner \
             CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++" \
