@@ -49,16 +49,36 @@ jobs:
         run: |
           sudo dpkg --add-architecture arm64
 
-          # ports.ubuntu.com hosts non-x86 packages; security.ubuntu.com does not
+          # Ubuntu 24.04 uses DEB822 format (ubuntu.sources), not sources.list
+          # Rewrite it to restrict to amd64 only, then add ports for arm64
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's/^Types: deb$/Types: deb/' /etc/apt/sources.list.d/ubuntu.sources
+            # Add arch constraint to every stanza
+            sudo python3 - <<'PYEOF'
+          import re, pathlib
+          p = pathlib.Path('/etc/apt/sources.list.d/ubuntu.sources')
+          txt = p.read_text()
+          # Add "Architectures: amd64" after every "Types:" line if not already present
+          out = []
+          for line in txt.splitlines():
+              out.append(line)
+              if line.startswith('Types:') and not any('Architectures' in l for l in out[-5:]):
+                  out.append('Architectures: amd64')
+          p.write_text('\n'.join(out) + '\n')
+          PYEOF
+          fi
+
+          # Also restrict any legacy sources.list lines
+          if [ -f /etc/apt/sources.list ]; then
+            sudo sed -i '/^deb /s/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+          fi
+
+          # Add ARM64 via ports.ubuntu.com (the only server that hosts non-x86)
           sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null <<'EOF'
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF
-
-          # Restrict existing amd64 sources so they don't try to serve arm64
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || \
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
 
           sudo apt-get update
           sudo apt-get install -y \
@@ -156,20 +176,17 @@ jobs:
         run: |
           BREW_OPENSSL=$(brew --prefix openssl)
           BREW_SECP=$(brew --prefix secp256k1)
-          export CPPFLAGS="-I$BREW_OPENSSL/include -I$BREW_SECP/include"
+          # Inject include paths directly into CXXFLAGS since Makefile may ignore CPPFLAGS
+          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }} -I$BREW_OPENSSL/include -I$BREW_SECP/include"
           export LDFLAGS="-L$BREW_OPENSSL/lib -L$BREW_SECP/lib"
-          export PKG_CONFIG_PATH="$BREW_OPENSSL/lib/pkgconfig:$BREW_SECP/lib/pkgconfig"
-          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
           make bloom_builder
 
       - name: Build scanner
         run: |
           BREW_OPENSSL=$(brew --prefix openssl)
           BREW_SECP=$(brew --prefix secp256k1)
-          export CPPFLAGS="-I$BREW_OPENSSL/include -I$BREW_SECP/include"
+          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }} -I$BREW_OPENSSL/include -I$BREW_SECP/include"
           export LDFLAGS="-L$BREW_OPENSSL/lib -L$BREW_SECP/lib"
-          export PKG_CONFIG_PATH="$BREW_OPENSSL/lib/pkgconfig:$BREW_SECP/lib/pkgconfig"
-          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
           make scanner
 
       - name: Build scanner-pg
@@ -177,10 +194,8 @@ jobs:
           BREW_OPENSSL=$(brew --prefix openssl)
           BREW_SECP=$(brew --prefix secp256k1)
           BREW_PQ=$(brew --prefix libpq)
-          export CPPFLAGS="-I$BREW_OPENSSL/include -I$BREW_SECP/include -I$BREW_PQ/include"
+          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }} -I$BREW_OPENSSL/include -I$BREW_SECP/include -I$BREW_PQ/include"
           export LDFLAGS="-L$BREW_OPENSSL/lib -L$BREW_SECP/lib -L$BREW_PQ/lib"
-          export PKG_CONFIG_PATH="$BREW_OPENSSL/lib/pkgconfig:$BREW_SECP/lib/pkgconfig:$BREW_PQ/lib/pkgconfig"
-          export CXXFLAGS="$CXXFLAGS -arch ${{ matrix.arch }}"
           make scanner-pg
 
       - name: Package binaries
@@ -214,7 +229,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Clone secp256k1 using the runner's native git BEFORE entering MSYS2 shell
+      # Use native Windows git BEFORE entering MSYS2 shell
       - name: Clone libsecp256k1
         shell: cmd
         run: git clone https://github.com/bitcoin-core/secp256k1.git C:\secp256k1
@@ -231,7 +246,6 @@ jobs:
             ${{ matrix.prefix }}-openssl
             ${{ matrix.prefix }}-pkg-config
             ${{ matrix.prefix }}-libwinpthread-git
-            git
 
       - name: Build libsecp256k1 (Windows)
         shell: msys2 {0}
