@@ -1,0 +1,178 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# C++ BUILD ARTIFACTS
+# ─────────────────────────────────────────────────────────────────────────────
+# Compiled binaries
+*.exe
+*.out
+*.app
+*.o
+*.obj
+*.so
+*.so.*
+*.dll
+*.dylib
+*.a
+*.lib
+
+# Your specific binaries
+bloom_builder
+scanner
+scanner-pg
+bloom_builder.exe
+scanner.exe
+scanner-pg.exe
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BUILD DIRECTORIES
+# ─────────────────────────────────────────────────────────────────────────────
+build/
+cmake-build-*/
+out/
+Debug/
+Release/
+x64/
+x86/
+bin/
+obj/
+.cache/
+.vs/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA FILES (LARGE/TEST DATA)
+# ─────────────────────────────────────────────────────────────────────────────
+# TSV/CSV data files (often large)
+*.tsv
+*.csv
+*.tsv.idx
+*.csv.idx
+
+# Bloom filter files (binary, large)
+*.bloom
+*.bf
+*.filter
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Your specific data files
+bit.out
+maz.tsv
+blockchair_bitcoin_addresses_latest.tsv
+blockchair_bitcoin_addresses_latest.tsv.idx
+
+# pi/ subdirectory - data and outputs
+pi/
+!pi/.gitkeep  # Keep directory structure if needed
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PYTHON ARTIFACTS (for tr.py and pi/*.py)
+# ─────────────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+*.egg-info/
+dist/
+*.egg
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IDE & EDITOR FILES
+# ─────────────────────────────────────────────────────────────────────────────
+# VS Code
+.vscode/
+*.code-workspace
+
+# Visual Studio
+*.vcxproj*
+*.sln
+*.user
+*.suo
+*.opensdf
+*.sdf
+ipch/
+
+# CLion / JetBrains
+.idea/
+*.iml
+
+# Vim/Emacs
+*~
+*.swp
+*.swo
+*.swn
+.*.un~
+\#*\#
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OS-SPECIFIC FILES
+# ─────────────────────────────────────────────────────────────────────────────
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.stackdump
+
+# Linux
+*~
+.nfs*
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGS & TEMPORARY FILES
+# ─────────────────────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.temp
+*.bak
+*.backup
+*.pid
+*.seed
+*.pid.lock
+logs/
+log/
+tmp/
+temp/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECURITY & CREDENTIALS
+# ─────────────────────────────────────────────────────────────────────────────
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+config.json
+wallet.dat
+*.wallet
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST & OUTPUT FILES
+# ─────────────────────────────────────────────────────────────────────────────
+test.tsv
+test.bloom
+hits.tsv
+results/
+output/
