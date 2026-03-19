@@ -233,11 +233,9 @@ jobs:
             msystem: MINGW64
             prefix: mingw-w64-x86_64
 
-    # NO global defaults shell here — each step declares its own shell
     steps:
       - uses: actions/checkout@v4
 
-      # Use native Windows git BEFORE MSYS2 is set up
       - name: Clone libsecp256k1
         shell: cmd
         run: git clone https://github.com/bitcoin-core/secp256k1.git C:\secp256k1
@@ -254,6 +252,7 @@ jobs:
             ${{ matrix.prefix }}-openssl
             ${{ matrix.prefix }}-pkg-config
             ${{ matrix.prefix }}-libwinpthread-git
+            ${{ matrix.prefix }}-mman-win32
 
       - name: Build libsecp256k1 (Windows)
         shell: msys2 {0}
@@ -272,14 +271,15 @@ jobs:
         shell: msys2 {0}
         run: |
           mingw32-make bloom_builder \
-            CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++"
+            CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++" \
+            LDFLAGS="-lmman"
 
       - name: Build scanner
         shell: msys2 {0}
         run: |
           mingw32-make scanner \
             CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++" \
-            LDFLAGS="-static -lws2_32"
+            LDFLAGS="-static -lws2_32 -lmman"
 
       - name: Package binaries
         shell: powershell
