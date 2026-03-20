@@ -1,6 +1,7 @@
+
 # Bitcoin Address Scanner - C++17 Build
 # Requires: libsecp256k1-dev libssl-dev
-#
+
 # Targets:
 #   make all           - build bloom_builder and scanner (TSV output only)
 #   make scanner-pg    - build scanner with PostgreSQL support (-DWITH_PG)
@@ -9,8 +10,9 @@
 #   make clean         - remove built binaries and test files
 #   make help          - show this message
 
-CXX      = g++
-CXXFLAGS = -O3 -std=c++17 -march=native -pthread -Wall -Wextra -Wshadow
+CXX      ?= g++
+CXXFLAGS ?= -O3 -std=c++17 -pthread -Wall -Wextra -Wshadow
+LDFLAGS  ?=
 
 # Libraries for each binary
 LIBS_BLOOM  =
@@ -31,28 +33,19 @@ install-deps-pg:
 
 # ── Build targets ────────────────────────────────────────────────────────────
 
-# Bloom filter builder (no extra libs needed beyond pthreads in CXXFLAGS)
 bloom_builder: bloom_builder.cpp
-	$(CXX) $(CXXFLAGS) bloom_builder.cpp -o bloom_builder $(LIBS_BLOOM)
-	@echo "  \xe2\x9c\x94 bloom_builder built"
+	$(CXX) $(CXXFLAGS) bloom_builder.cpp -o bloom_builder $(LDFLAGS) $(LIBS_BLOOM)
+	@echo "  ✔ bloom_builder built"
 
-# Scanner — TSV output only (default, no PostgreSQL dependency)
 scanner: scanner.cpp bip39_wordlist.hpp
-	$(CXX) $(CXXFLAGS) scanner.cpp -o scanner $(LIBS_SCAN)
-	@echo "  \xe2\x9c\x94 scanner built (TSV mode)"
+	$(CXX) $(CXXFLAGS) scanner.cpp -o scanner $(LDFLAGS) $(LIBS_SCAN)
+	@echo "  ✔ scanner built (TSV mode)"
 
-# Scanner — with PostgreSQL support
-# Requires: sudo apt install libpq-dev
-# Usage:    ./scanner --pg \"host=localhost dbname=btc user=postgres\"
-# Scanner — with PostgreSQL support
 scanner-pg: scanner.cpp bip39_wordlist.hpp
-	$(CXX) $(CXXFLAGS) -DWITH_PG `pkg-config --cflags libpq` scanner.cpp -o scanner-pg $(LIBS_PG)
-	@echo "  \xe2\x9c\x94 scanner built (PostgreSQL mode)"
+	$(CXX) $(CXXFLAGS) -DWITH_PG `pkg-config --cflags libpq` scanner.cpp -o scanner-pg $(LDFLAGS) $(LIBS_PG)
+	@echo "  ✔ scanner built (PostgreSQL mode)"
 
 # ── Smoke test ───────────────────────────────────────────────────────────────
-# Uses 5 real Bitcoin addresses (genesis block + well-known wallets).
-# TSV must be sorted (scanner uses binary search).
-# bloom_builder and scanner are built first automatically.
 test: bloom_builder scanner
 	@echo "  Building test data..."
 	@printf '%s\n' \
@@ -71,7 +64,7 @@ test: bloom_builder scanner
 		--mode random \
 		--threads 2 \
 		|| true
-	@echo "  \xe2\x9c\x94 Test complete"
+	@echo "  ✔ Test complete"
 
 # ── Help ─────────────────────────────────────────────────────────────────────
 help:
@@ -103,5 +96,5 @@ help:
 
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 clean:
-	rm -f bloom_builder scanner test.tsv test.bloom hits.tsv
+	rm -f bloom_builder scanner scanner-pg test.tsv test.bloom hits.tsv
 	@echo "  Cleaned."

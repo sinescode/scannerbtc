@@ -224,7 +224,9 @@ struct MMapFile {
         if (size == 0) { close(fd); fd = -1; return; }
         data = (const char*)mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
         if (data == MAP_FAILED) { perror("mmap"); exit(1); }
+        #ifdef __linux__
         madvise((void*)data, size, MADV_SEQUENTIAL);
+        #endif
     }
     ~MMapFile() {
         if (data && data != MAP_FAILED) munmap((void*)data, size);
