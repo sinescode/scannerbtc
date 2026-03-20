@@ -13,9 +13,6 @@ name: Release - Cross Platform Build
 permissions:
   contents: write
 
-env:
-  CXXFLAGS: -O3 -std=c++17 -pthread -Wall -Wextra -Wshadow
-
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
   # LINUX BUILDS
@@ -93,38 +90,35 @@ jobs:
           cmake --build build -j$(nproc)
           sudo cmake --install build
 
-      - name: Set build flags (cross-compile)
-        if: ${{ matrix.cross }}
-        run: |
-          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-          echo "CXXFLAGS_EXTRA=-march=armv8-a -I/usr/aarch64-linux-gnu/include" >> $GITHUB_ENV
-          echo "LDFLAGS_EXTRA=-L/usr/aarch64-linux-gnu/lib" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/aarch64-linux-gnu/lib/pkgconfig" >> $GITHUB_ENV
-
-      - name: Set build flags (native)
-        if: ${{ !matrix.cross }}
-        run: |
-          echo "CC=gcc" >> $GITHUB_ENV
-          echo "CXX=g++" >> $GITHUB_ENV
-          echo "CXXFLAGS_EXTRA=-march=native" >> $GITHUB_ENV
-          echo "LDFLAGS_EXTRA=" >> $GITHUB_ENV
-
       - name: Build bloom_builder
         run: |
-          make bloom_builder \
-            CC="${CC}" \
-            CXX="${CXX}" \
-            CXXFLAGS="${CXXFLAGS} ${CXXFLAGS_EXTRA}" \
-            LDFLAGS="${LDFLAGS} ${LDFLAGS_EXTRA}"
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            make bloom_builder \
+              CC=aarch64-linux-gnu-gcc \
+              CXX=aarch64-linux-gnu-g++ \
+              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=armv8-a -I/usr/aarch64-linux-gnu/include" \
+              LDFLAGS="-L/usr/aarch64-linux-gnu/lib"
+          else
+            make bloom_builder \
+              CC=gcc \
+              CXX=g++ \
+              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=native"
+          fi
 
       - name: Build scanner
         run: |
-          make scanner \
-            CC="${CC}" \
-            CXX="${CXX}" \
-            CXXFLAGS="${CXXFLAGS} ${CXXFLAGS_EXTRA}" \
-            LDFLAGS="${LDFLAGS} ${LDFLAGS_EXTRA}"
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            make scanner \
+              CC=aarch64-linux-gnu-gcc \
+              CXX=aarch64-linux-gnu-g++ \
+              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=armv8-a -I/usr/aarch64-linux-gnu/include" \
+              LDFLAGS="-L/usr/aarch64-linux-gnu/lib"
+          else
+            make scanner \
+              CC=gcc \
+              CXX=g++ \
+              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=native"
+          fi
 
       - name: Build scanner-pg
         run: |
@@ -134,10 +128,9 @@ jobs:
           else
             sudo apt-get install -y libpq-dev
             make scanner-pg \
-              CC="${CC}" \
-              CXX="${CXX}" \
-              CXXFLAGS="${CXXFLAGS} ${CXXFLAGS_EXTRA}" \
-              LDFLAGS="${LDFLAGS} ${LDFLAGS_EXTRA}"
+              CC=gcc \
+              CXX=g++ \
+              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=native"
           fi
 
       - name: Package binaries
@@ -175,35 +168,35 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: |
-          brew install secp256k1 openssl pkg-config libpq
+        run: brew install secp256k1 openssl pkg-config libpq
 
-      - name: Set environment variables
+      - name: Build bloom_builder
+        run: |
+          BREW_OPENSSL=$(brew --prefix openssl)
+          BREW_SECP=$(brew --prefix secp256k1)
+          make bloom_builder \
+            CXX=g++ \
+            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch ${{ matrix.arch }} -I${BREW_OPENSSL}/include -I${BREW_SECP}/include" \
+            LDFLAGS="-L${BREW_OPENSSL}/lib -L${BREW_SECP}/lib"
+
+      - name: Build scanner
+        run: |
+          BREW_OPENSSL=$(brew --prefix openssl)
+          BREW_SECP=$(brew --prefix secp256k1)
+          make scanner \
+            CXX=g++ \
+            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch ${{ matrix.arch }} -I${BREW_OPENSSL}/include -I${BREW_SECP}/include" \
+            LDFLAGS="-L${BREW_OPENSSL}/lib -L${BREW_SECP}/lib"
+
+      - name: Build scanner-pg
         run: |
           BREW_OPENSSL=$(brew --prefix openssl)
           BREW_SECP=$(brew --prefix secp256k1)
           BREW_PQ=$(brew --prefix libpq)
-          echo "OPENSSL_ROOT=${BREW_OPENSSL}" >> $GITHUB_ENV
-          echo "SECP_ROOT=${BREW_SECP}" >> $GITHUB_ENV
-          echo "PQ_ROOT=${BREW_PQ}" >> $GITHUB_ENV
-
-      - name: Build bloom_builder
-        run: |
-          make bloom_builder \
-            CXXFLAGS="${CXXFLAGS} -arch ${{ matrix.arch }} -I${OPENSSL_ROOT}/include -I${SECP_ROOT}/include" \
-            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib"
-
-      - name: Build scanner
-        run: |
-          make scanner \
-            CXXFLAGS="${CXXFLAGS} -arch ${{ matrix.arch }} -I${OPENSSL_ROOT}/include -I${SECP_ROOT}/include" \
-            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib"
-
-      - name: Build scanner-pg
-        run: |
           make scanner-pg \
-            CXXFLAGS="${CXXFLAGS} -arch ${{ matrix.arch }} -I${OPENSSL_ROOT}/include -I${SECP_ROOT}/include -I${PQ_ROOT}/include" \
-            LDFLAGS="-L${OPENSSL_ROOT}/lib -L${SECP_ROOT}/lib -L${PQ_ROOT}/lib"
+            CXX=g++ \
+            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch ${{ matrix.arch }} -I${BREW_OPENSSL}/include -I${BREW_SECP}/include -I${BREW_PQ}/include" \
+            LDFLAGS="-L${BREW_OPENSSL}/lib -L${BREW_SECP}/lib -L${BREW_PQ}/lib"
 
       - name: Package binaries
         run: |
@@ -271,14 +264,16 @@ jobs:
         shell: msys2 {0}
         run: |
           mingw32-make bloom_builder \
-            CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++" \
+            CXX=g++ \
+            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -static-libgcc -static-libstdc++" \
             LDFLAGS="-lmman"
 
       - name: Build scanner
         shell: msys2 {0}
         run: |
           mingw32-make scanner \
-            CXXFLAGS="${CXXFLAGS} -static-libgcc -static-libstdc++" \
+            CXX=g++ \
+            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -static-libgcc -static-libstdc++" \
             LDFLAGS="-static -lws2_32 -lmman"
 
       - name: Package binaries
