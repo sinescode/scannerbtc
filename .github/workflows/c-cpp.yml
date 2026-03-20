@@ -1,18 +1,20 @@
+```yaml
 name: Release - Cross Platform Build
 
 "on":
   push:
-    branches: [ main, master ]
     tags:
       - 'v*.*.*'
       - 'v*.*'
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # LINUX BUILDS (x86_64, arm64 native, arm64 cross)
+  # ───────────────────────────────────────────────────────────────────────────
   build-linux:
     name: Linux ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -145,17 +147,12 @@ jobs:
           name: linux-${{ matrix.arch }}
           path: dist/*.tar.gz
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # macOS ARM64 ONLY
+  # ───────────────────────────────────────────────────────────────────────────
   build-macos:
-    name: macOS ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: macos-14
-          - arch: arm64
-            runner: macos-14
+    name: macOS arm64
+    runs-on: macos-14
 
     steps:
       - uses: actions/checkout@v4
@@ -169,7 +166,7 @@ jobs:
           BREW_SECP=$(brew --prefix secp256k1)
           make bloom_builder \
             CXX=g++ \
-            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch ${{ matrix.arch }} -I${BREW_OPENSSL}/include -I${BREW_SECP}/include" \
+            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch arm64 -I${BREW_OPENSSL}/include -I${BREW_SECP}/include" \
             LDFLAGS="-L${BREW_OPENSSL}/lib -L${BREW_SECP}/lib"
 
       - name: Build scanner
@@ -178,7 +175,7 @@ jobs:
           BREW_SECP=$(brew --prefix secp256k1)
           make scanner \
             CXX=g++ \
-            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch ${{ matrix.arch }} -I${BREW_OPENSSL}/include -I${BREW_SECP}/include" \
+            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch arm64 -I${BREW_OPENSSL}/include -I${BREW_SECP}/include" \
             LDFLAGS="-L${BREW_OPENSSL}/lib -L${BREW_SECP}/lib -lsecp256k1 -lssl -lcrypto"
 
       - name: Build scanner-pg
@@ -188,103 +185,29 @@ jobs:
           BREW_PQ=$(brew --prefix libpq)
           make scanner-pg \
             CXX=g++ \
-            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch ${{ matrix.arch }} -I${BREW_OPENSSL}/include -I${BREW_SECP}/include -I${BREW_PQ}/include" \
+            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch arm64 -I${BREW_OPENSSL}/include -I${BREW_SECP}/include -I${BREW_PQ}/include" \
             LDFLAGS="-L${BREW_OPENSSL}/lib -L${BREW_SECP}/lib -L${BREW_PQ}/lib -lsecp256k1 -lssl -lcrypto -lpq"
 
       - name: Package binaries
         run: |
-          mkdir -p dist/btc-scanner-macos-${{ matrix.arch }}
-          cp bloom_builder scanner scanner-pg dist/btc-scanner-macos-${{ matrix.arch }}/
-          cp Makefile README.md LICENSE* dist/btc-scanner-macos-${{ matrix.arch }}/ 2>/dev/null || true
+          mkdir -p dist/btc-scanner-macos-arm64
+          cp bloom_builder scanner scanner-pg dist/btc-scanner-macos-arm64/
+          cp Makefile README.md LICENSE* dist/btc-scanner-macos-arm64/ 2>/dev/null || true
           cd dist
-          tar czf btc-scanner-macos-${{ matrix.arch }}.tar.gz btc-scanner-macos-${{ matrix.arch }}
+          tar czf btc-scanner-macos-arm64.tar.gz btc-scanner-macos-arm64
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ matrix.arch }}
+          name: macos-arm64
           path: dist/*.tar.gz
 
-  build-windows:
-    name: Windows ${{ matrix.arch }}
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            msystem: MINGW64
-            prefix: mingw-w64-x86_64
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Clone libsecp256k1
-        shell: cmd
-        run: git clone https://github.com/bitcoin-core/secp256k1.git C:\secp256k1
-
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: ${{ matrix.msystem }}
-          update: true
-          install: >-
-            ${{ matrix.prefix }}-gcc
-            ${{ matrix.prefix }}-make
-            ${{ matrix.prefix }}-cmake
-            ${{ matrix.prefix }}-openssl
-            ${{ matrix.prefix }}-pkg-config
-            ${{ matrix.prefix }}-libwinpthread-git
-            ${{ matrix.prefix }}-mman-win32
-
-      - name: Build libsecp256k1 (Windows)
-        shell: msys2 {0}
-        run: |
-          cd /c/secp256k1
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/mingw64 \
-            -DSECP256K1_BUILD_TESTS=OFF \
-            -DSECP256K1_BUILD_EXAMPLES=OFF \
-            -DSECP256K1_ENABLE_MODULE_RECOVERY=ON
-          cmake --build build -j$(nproc)
-          cmake --install build
-          ls /mingw64/lib/libsecp256k1.a
-
-      - name: Build bloom_builder
-        shell: msys2 {0}
-        run: |
-          mingw32-make bloom_builder \
-            CXX=g++ \
-            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -static-libgcc -static-libstdc++ -I/mingw64/include" \
-            LDFLAGS="-L/mingw64/lib -lmman"
-
-      - name: Build scanner
-        shell: msys2 {0}
-        run: |
-          mingw32-make scanner \
-            CXX=g++ \
-            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -static-libgcc -static-libstdc++ -I/mingw64/include" \
-            LDFLAGS="-L/mingw64/lib -lsecp256k1 -lssl -lcrypto -lws2_32 -lmman"
-
-      - name: Package binaries
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force -Path dist\btc-scanner-windows-${{ matrix.arch }}
-          Copy-Item bloom_builder.exe, scanner.exe -Destination dist\btc-scanner-windows-${{ matrix.arch }}\ -ErrorAction SilentlyContinue
-          Copy-Item Makefile, README.md -Destination dist\btc-scanner-windows-${{ matrix.arch }}\ -ErrorAction SilentlyContinue
-          cd dist
-          Compress-Archive -Path btc-scanner-windows-${{ matrix.arch }} -DestinationPath btc-scanner-windows-${{ matrix.arch }}.zip
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-${{ matrix.arch }}
-          path: dist/*.zip
-
+  # ───────────────────────────────────────────────────────────────────────────
+  # CREATE RELEASE
+  # ───────────────────────────────────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [build-linux, build-macos, build-windows]
+    needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -308,6 +231,5 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/*.tar.gz
-            artifacts/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
