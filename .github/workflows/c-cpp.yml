@@ -1,4 +1,3 @@
-
 name: Release - Cross Platform Build
 
 "on":
@@ -14,9 +13,6 @@ permissions:
   contents: write
 
 jobs:
-  # ───────────────────────────────────────────────────────────────────────────
-  # LINUX BUILDS
-  # ───────────────────────────────────────────────────────────────────────────
   build-linux:
     name: Linux ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -97,12 +93,12 @@ jobs:
               CC=aarch64-linux-gnu-gcc \
               CXX=aarch64-linux-gnu-g++ \
               CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=armv8-a -I/usr/aarch64-linux-gnu/include" \
-              LDFLAGS="-L/usr/aarch64-linux-gnu/lib"
+              LDFLAGS="-L/usr/aarch64-linux-gnu/lib -lsecp256k1 -lssl -lcrypto"
           else
             make bloom_builder \
-              CC=gcc \
-              CXX=g++ \
-              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=native"
+              CC=gcc CXX=g++ \
+              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=native" \
+              LDFLAGS=""
           fi
 
       - name: Build scanner
@@ -112,12 +108,12 @@ jobs:
               CC=aarch64-linux-gnu-gcc \
               CXX=aarch64-linux-gnu-g++ \
               CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=armv8-a -I/usr/aarch64-linux-gnu/include" \
-              LDFLAGS="-L/usr/aarch64-linux-gnu/lib"
+              LDFLAGS="-L/usr/aarch64-linux-gnu/lib -lsecp256k1 -lssl -lcrypto"
           else
             make scanner \
-              CC=gcc \
-              CXX=g++ \
-              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=native"
+              CC=gcc CXX=g++ \
+              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=native" \
+              LDFLAGS="-lsecp256k1 -lssl -lcrypto"
           fi
 
       - name: Build scanner-pg
@@ -128,9 +124,9 @@ jobs:
           else
             sudo apt-get install -y libpq-dev
             make scanner-pg \
-              CC=gcc \
-              CXX=g++ \
-              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=native"
+              CC=gcc CXX=g++ \
+              CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -march=native" \
+              LDFLAGS="-lsecp256k1 -lssl -lcrypto -lpq"
           fi
 
       - name: Package binaries
@@ -149,9 +145,6 @@ jobs:
           name: linux-${{ matrix.arch }}
           path: dist/*.tar.gz
 
-  # ───────────────────────────────────────────────────────────────────────────
-  # macOS BUILDS
-  # ───────────────────────────────────────────────────────────────────────────
   build-macos:
     name: macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -186,7 +179,7 @@ jobs:
           make scanner \
             CXX=g++ \
             CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch ${{ matrix.arch }} -I${BREW_OPENSSL}/include -I${BREW_SECP}/include" \
-            LDFLAGS="-L${BREW_OPENSSL}/lib -L${BREW_SECP}/lib"
+            LDFLAGS="-L${BREW_OPENSSL}/lib -L${BREW_SECP}/lib -lsecp256k1 -lssl -lcrypto"
 
       - name: Build scanner-pg
         run: |
@@ -196,7 +189,7 @@ jobs:
           make scanner-pg \
             CXX=g++ \
             CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -arch ${{ matrix.arch }} -I${BREW_OPENSSL}/include -I${BREW_SECP}/include -I${BREW_PQ}/include" \
-            LDFLAGS="-L${BREW_OPENSSL}/lib -L${BREW_SECP}/lib -L${BREW_PQ}/lib"
+            LDFLAGS="-L${BREW_OPENSSL}/lib -L${BREW_SECP}/lib -L${BREW_PQ}/lib -lsecp256k1 -lssl -lcrypto -lpq"
 
       - name: Package binaries
         run: |
@@ -212,9 +205,6 @@ jobs:
           name: macos-${{ matrix.arch }}
           path: dist/*.tar.gz
 
-  # ───────────────────────────────────────────────────────────────────────────
-  # WINDOWS BUILDS
-  # ───────────────────────────────────────────────────────────────────────────
   build-windows:
     name: Windows ${{ matrix.arch }}
     runs-on: windows-latest
@@ -259,22 +249,23 @@ jobs:
             -DSECP256K1_ENABLE_MODULE_RECOVERY=ON
           cmake --build build -j$(nproc)
           cmake --install build
+          ls /mingw64/lib/libsecp256k1.a
 
       - name: Build bloom_builder
         shell: msys2 {0}
         run: |
           mingw32-make bloom_builder \
             CXX=g++ \
-            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -static-libgcc -static-libstdc++" \
-            LDFLAGS="-lmman"
+            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -static-libgcc -static-libstdc++ -I/mingw64/include" \
+            LDFLAGS="-L/mingw64/lib -lmman"
 
       - name: Build scanner
         shell: msys2 {0}
         run: |
           mingw32-make scanner \
             CXX=g++ \
-            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -static-libgcc -static-libstdc++" \
-            LDFLAGS="-static -lws2_32 -lmman"
+            CXXFLAGS="-O3 -std=c++17 -pthread -Wall -Wextra -Wshadow -static-libgcc -static-libstdc++ -I/mingw64/include" \
+            LDFLAGS="-L/mingw64/lib -lsecp256k1 -lssl -lcrypto -lws2_32 -lmman"
 
       - name: Package binaries
         shell: powershell
@@ -291,9 +282,6 @@ jobs:
           name: windows-${{ matrix.arch }}
           path: dist/*.zip
 
-  # ───────────────────────────────────────────────────────────────────────────
-  # CREATE RELEASE
-  # ───────────────────────────────────────────────────────────────────────────
   release:
     name: Create Release
     needs: [build-linux, build-macos, build-windows]
