@@ -1019,14 +1019,18 @@ private:
                       << total_lines/1000000.0 << "M lines"
                       << " (" << std::fixed << std::setprecision(2) << secs << "s)"
                       << ansi::RESET << "\n";
+            #if defined(__linux__)
             madvise(const_cast<char*>(tsv_data), tsv_size, MADV_RANDOM);
+            #endif
             return true;
         }
 
         // ── Build index: parallel multi-threaded scan for newlines ────────────
         // MADV_SEQUENTIAL during the build: kernel prefetches pages linearly
         // → ~2x faster for a sequential scan than MADV_RANDOM.
+        #if defined(__linux__)
         madvise(const_cast<char*>(tsv_data), tsv_size, MADV_SEQUENTIAL);
+        #endif
 
         unsigned ncpu = std::max(1u, std::thread::hardware_concurrency());
         std::cout << ansi::YELLOW
@@ -1090,7 +1094,9 @@ private:
                   << " (" << std::fixed << std::setprecision(2) << secs << "s)"
                   << ansi::RESET << "\n";
 
+        #if defined(__linux__)
         madvise(const_cast<char*>(tsv_data), tsv_size, MADV_RANDOM);
+        #endif
 
         // Save index for next run
         if (save_idx(idx_path)) {
