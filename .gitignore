@@ -13,7 +13,8 @@
 *.dylib
 *.a
 *.lib
-
+bitout.bloom 
+bloom_checker 
 # Your specific binaries
 bloom_builder
 scanner

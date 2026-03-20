@@ -575,7 +575,6 @@ static XKey derive_child_key(const XKey& parent, uint32_t index) {
 static std::string generate_mnemonic(std::mt19937_64& rng, int word_count = 12) {
     // word_count must be 12 or 24
     const int ENT_BYTES  = (word_count == 24) ? 32 : 16;  // 256 or 128 bits
-    const int CS_BITS    = ENT_BYTES / 4;                  // 8 or 4 bits
     // Total bits: ENT_BYTES*8 + CS_BITS = word_count*11 (264 or 132)
 
     // Step 1: generate entropy using cryptographically secure RNG
@@ -621,10 +620,6 @@ static std::string generate_mnemonic(std::mt19937_64& rng, int word_count = 12) 
     }
     return result;
 }
-
-// Convenience wrappers
-static std::string generate_mnemonic_12(std::mt19937_64& rng) { return generate_mnemonic(rng, 12); }
-static std::string generate_mnemonic_24(std::mt19937_64& rng) { return generate_mnemonic(rng, 24); }
 
 static std::vector<uint8_t> mnemonic_to_seed(const std::string& phrase) {
     // BIP-39: PBKDF2-HMAC-SHA512(mnemonic, "mnemonic", 2048)
@@ -755,7 +750,9 @@ struct HybridFilter {
     // Bloom state
     std::vector<uint8_t> bitmap;
     uint64_t bitmap_bits = 0;
-    int      k_num       = 10;
+    uint64_t bitmap_mask = 0;      // bitmap_bits-1 if pow2 (v3), else 0
+    bool     bitmap_pow2 = false;  // true → use & instead of % (fast path)
+    int      k_num       = 0;      // 0 until set by load_bloom/finalize_k
     uint64_t sip_k0      = 0;
     uint64_t sip_k1      = 0;
 
@@ -820,6 +817,9 @@ struct HybridFilter {
         // Load components according to mode
         if (has_bloom && !load_bloom(bloom_path)) return false;
         if (has_tsv   && !load_tsv(tsv_path))    return false;
+        // For v1/v2 bloom files: compute k from bitmap size + TSV line count.
+        // For v3 files (or bloom-only mode): finalize_k() is a no-op.
+        if (has_bloom) finalize_k(total_lines);
         return true;
     }
 
@@ -857,9 +857,18 @@ struct HybridFilter {
         if (bitmap.empty()) return false;
         auto [h1,h2] = siphash13_double((const uint8_t*)addr.data(), addr.size(),
                                          sip_k0, sip_k1);
-        for (int i = 0; i < k_num; ++i) {
-            uint64_t bit = (h1 + (uint64_t)i * h2) % bitmap_bits;
-            if (!(bitmap[bit/8] & (1u << (bit%8)))) return false;
+        if (bitmap_pow2) {
+            // Fast path: & instead of 64-bit division (v3 bloom, pow2 bitmap)
+            for (int i = 0; i < k_num; ++i) {
+                uint64_t bit = (h1 + (uint64_t)i * h2) & bitmap_mask;
+                if (!(bitmap[bit >> 3] & (uint8_t)(1u << (bit & 7)))) return false;
+            }
+        } else {
+            // Legacy path: general modulo (v1/v2 bloom)
+            for (int i = 0; i < k_num; ++i) {
+                uint64_t bit = (h1 + (uint64_t)i * h2) % bitmap_bits;
+                if (!(bitmap[bit >> 3] & (uint8_t)(1u << (bit & 7)))) return false;
+            }
         }
         return true;
     }
@@ -890,13 +899,26 @@ private:
 
         uint8_t ver;
         f.read(reinterpret_cast<char*>(&ver), 1);
-        if (ver == 2) {
+        if (!f) { std::cerr << "Empty bloom file\n"; return false; }
+
+        bool k_stored = false;
+        if (ver == 3) {
+            // v3: k0(8) + k1(8) + k_num(4) + bitmap_len(8) + bitmap
+            f.read(reinterpret_cast<char*>(&sip_k0), 8);
+            f.read(reinterpret_cast<char*>(&sip_k1), 8);
+            uint32_t k32 = 0;
+            f.read(reinterpret_cast<char*>(&k32), 4);
+            k_num    = (int)k32;
+            k_stored = true;
+        } else if (ver == 2) {
+            // v2: k0(8) + k1(8) + bitmap_len(8) + bitmap  (k_num NOT stored)
             f.read(reinterpret_cast<char*>(&sip_k0), 8);
             f.read(reinterpret_cast<char*>(&sip_k1), 8);
         } else if (ver == 1) {
             sip_k0 = sip_k1 = 0;
         } else {
-            std::cerr << "Unknown bloom version: " << (int)ver << "\n";
+            std::cerr << "Unknown bloom version: " << (int)ver
+                      << " (expected 1, 2, or 3)\n";
             return false;
         }
 
@@ -907,10 +929,55 @@ private:
         if (!f) { std::cerr << "Short read in bloom file\n"; return false; }
         bitmap_bits = blen * 8;
 
-        std::cout << ansi::GREEN << "  ✔ Bloom: "
-                  << blen/1024/1024 << " MB, k=" << k_num
+        // For v1/v2: k_num was not stored. Compute from bitmap size + TSV line count.
+        // This is deferred to after TSV is loaded — see load() below.
+        // For now mark k_num=0 to trigger the deferred computation.
+        if (!k_stored) k_num = 0;
+
+        // Check if bitmap is power-of-2 bytes (v3 builder guarantees this).
+        // If so, enable fast & modulo path in bloom_check().
+        {
+            uint64_t b2 = blen;
+            if (b2 && (b2 & (b2 - 1)) == 0) {   // is power of 2?
+                bitmap_pow2 = true;
+                bitmap_mask = bitmap_bits - 1;
+            }
+        }
+
+        std::cout << ansi::GREEN << "  ✔ Bloom v" << (int)ver << ": "
+                  << blen/1024/1024 << " MB"
+                  << (k_stored ? ", k=" + std::to_string(k_num) + " (stored)"
+                               : ", k=? (computed after TSV load)")
+                  << (bitmap_pow2 ? ", pow2[fast]" : "")
                   << ansi::RESET << "\n";
         return true;
+    }
+
+    // Called after both bloom and TSV are loaded.
+    // For v3 bloom files this is a no-op (k_num already set from file).
+    // For v1/v2: compute k = floor((bitmap_bits / n_items) * ln2)
+    void finalize_k(size_t n_items) {
+        if (k_num > 0) return;   // v3: already set from file
+        if (bitmap_bits == 0)  { k_num = 10; return; }
+        if (n_items == 0) {
+            // BLOOM_ONLY mode: no TSV to count lines from.
+            // Default to 10 — most common value for fpp=0.001.
+            // If wrong, rebuild bloom with new bloom_builder (v3 stores k).
+            k_num = 10;
+            std::cout << ansi::YELLOW
+                      << "  ! k defaulted to 10 (bloom-only mode, no TSV to compute from)\n"
+                      << "    Rebuild bloom with new bloom_builder for exact k (v3 format)\n"
+                      << ansi::RESET;
+            return;
+        }
+        // Mirror bloom_builder formula exactly: k = floor((m/n) * ln2)
+        double k = ((double)bitmap_bits / (double)n_items) * 0.6931471805599453;
+        k_num = (int)std::max(1.0, std::floor(k));
+        std::cout << ansi::CYAN
+                  << "  ✔ k computed: k=" << k_num
+                  << " (bitmap=" << bitmap_bits/1024/1024 << " Mb"
+                  << ", n=" << n_items << ")"
+                  << ansi::RESET << "\n";
     }
 
     // ── TSV index cache ───────────────────────────────────────────────────────
@@ -972,11 +1039,7 @@ private:
         // MAP_POPULATE: kernel pre-faults pages into page cache in the background
         // while we load/build the index — effectively free prefetch.
         tsv_data = reinterpret_cast<const char*>(
-            mmap(nullptr, tsv_size, PROT_READ, MAP_SHARED
-            #ifdef MAP_POPULATE
-                | MAP_POPULATE
-            #endif
-                , tsv_fd, 0));
+            mmap(nullptr, tsv_size, PROT_READ, MAP_SHARED | MAP_POPULATE, tsv_fd, 0));
         if (tsv_data == MAP_FAILED) {
             tsv_data = reinterpret_cast<const char*>(
                 mmap(nullptr, tsv_size, PROT_READ, MAP_SHARED, tsv_fd, 0));
@@ -996,8 +1059,12 @@ private:
             const char* first_nl = reinterpret_cast<const char*>(
                 memchr(tsv_data, '\n', tsv_size));
             if (first_nl) {
+                // Use the same validation as bloom_builder and bloom_checker:
+                // reject anything whose first char is outside '1'..'z'
+                // This correctly skips "address\tbalance" headers and
+                // matches exactly what the builder inserted.
                 char fc = tsv_data[0];
-                bool is_header = (fc != '1' && fc != '3' && fc != 'b');
+                bool is_header = (fc < '1' || fc > 'z');
                 if (is_header) {
                     tsv_data_start = (size_t)(first_nl - tsv_data) + 1;
                     std::cout << ansi::DIM
@@ -1019,18 +1086,14 @@ private:
                       << total_lines/1000000.0 << "M lines"
                       << " (" << std::fixed << std::setprecision(2) << secs << "s)"
                       << ansi::RESET << "\n";
-            #if defined(__linux__)
             madvise(const_cast<char*>(tsv_data), tsv_size, MADV_RANDOM);
-            #endif
             return true;
         }
 
         // ── Build index: parallel multi-threaded scan for newlines ────────────
         // MADV_SEQUENTIAL during the build: kernel prefetches pages linearly
         // → ~2x faster for a sequential scan than MADV_RANDOM.
-        #if defined(__linux__)
         madvise(const_cast<char*>(tsv_data), tsv_size, MADV_SEQUENTIAL);
-        #endif
 
         unsigned ncpu = std::max(1u, std::thread::hardware_concurrency());
         std::cout << ansi::YELLOW
@@ -1094,9 +1157,7 @@ private:
                   << " (" << std::fixed << std::setprecision(2) << secs << "s)"
                   << ansi::RESET << "\n";
 
-        #if defined(__linux__)
         madvise(const_cast<char*>(tsv_data), tsv_size, MADV_RANDOM);
-        #endif
 
         // Save index for next run
         if (save_idx(idx_path)) {
@@ -1158,7 +1219,7 @@ struct TSVLogger : HitLogger {
 // ── PostgreSQL backend ────────────────────────────────────────────────────────
 // Activated with --pg "connection-string"
 // Requires: apt install libpq-dev  +  compile flag: -DWITH_PG -lpq
-// Schema matches the Python version's abfound_addresses table exactly.
+// Schema matches the Python version's found_addresses table exactly.
 // ─────────────────────────────────────────────────────────────────────────────
 // PostgreSQL connection string normalizer
 //
@@ -1248,7 +1309,7 @@ struct PGLogger : HitLogger {
 
         // Create table if absent — same schema as Python version
         const char* ddl = R"SQL(
-            CREATE TABLE IF NOT EXISTS abfound_addresses (
+            CREATE TABLE IF NOT EXISTS found_addresses (
                 id                SERIAL PRIMARY KEY,
                 address           TEXT NOT NULL UNIQUE,
                 address_type      TEXT NOT NULL,
@@ -1298,7 +1359,7 @@ struct PGLogger : HitLogger {
             cpub.c_str(), xpub.c_str(), mnemonic.c_str(), path.c_str()
         };
         const char* sql =
-            "INSERT INTO abfound_addresses "
+            "INSERT INTO found_addresses "
             "(address,address_type,private_key_wif,private_key_hex,"
             " compressed_pubkey,xonly_pubkey,mnemonic,derivation_path) "
             "VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (address) DO NOTHING";
@@ -1653,6 +1714,7 @@ static void print_banner() {
 }
 
 static void stats_loop(int nthreads, const std::string& mode_str, const std::string& filter_mode_str) {
+    (void)mode_str;  // shown in banner, not needed in the stats line
     auto t_start = std::chrono::steady_clock::now();
     uint64_t prev_scanned = 0;
 
@@ -1704,7 +1766,6 @@ int main(int argc, char** argv) {
     int         mode        = MODE_RANDOM;
     int         depth       = 5;        // BIP-32 derivation depth
     int         words       = 0;        // 0=random 12/24, 12, or 24
-    bool        debug_mode  = false;
     uint64_t    show_interval = 0;   // --show N: print panel every N addresses
 
     for (int i = 1; i < argc; ++i) {
@@ -1723,7 +1784,6 @@ int main(int argc, char** argv) {
             else mode = MODE_RANDOM;
         }
         else if ((a == "--show") && i+1<argc) show_interval = (uint64_t)std::stoull(argv[++i]);
-        else if (a == "--debug") debug_mode = true;
         else if (a == "--help" || a == "-h") {
             std::cout <<
                 "Usage: scanner [options]\n"
@@ -1752,8 +1812,7 @@ int main(int argc, char** argv) {
                 "  --show    <N>          Print full key/address panel every N addresses\n"
                 "                         e.g. --show 100000  (every 100k addresses)\n"
                 "                         Random mode: shows private key + pubkeys + 5 addrs\n"
-                "                         Mnemonic mode: shows phrase + per-type key table\n"
-                "  --debug                Verbose output\n";
+                "                         Mnemonic mode: shows phrase + per-type key table\n";
             return 0;
         }
     }
